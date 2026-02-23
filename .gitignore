@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.env
+.venv/
+venv/
+ENV/
+env/
+.env
+
+# Node / JS
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS Generated Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs and Editors
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Project Specific (Optional / Large Binary Files)
+# Note: If you want to backup your models and dances to git, keep these commented out.
+# If your repo limit is small, uncomment these to ignore heavy 3D assets.
+# /model /*.vrm
+# /Dance/*.fbx
+# /Dance/*.vrma
+# /pose/*.fbx
+# /pose/*.vrma

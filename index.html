@@ -1,12 +1,15 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Girlfriend — VRM Experience</title>
-  <meta name="description" content="Interactive AI companion powered by VRM 3D model, Three.js, and procedural animation." />
+  <meta name="description"
+    content="Interactive AI companion powered by VRM 3D model, Three.js, and procedural animation." />
   <link rel="stylesheet" href="style.css" />
 </head>
+
 <body>
 
   <!-- Background gradient -->
@@ -29,7 +32,12 @@
     </div>
     <div class="topbar-status">
       <div id="ws-indicator"></div>
-      <span id="ws-label">Connecting…</span>
+      <span id="ws-label" style="margin-right: 15px;">Connecting…</span>
+      <select id="model-select"
+        style="background: linear-gradient(135deg, #ff477e, #ff7096); color: white; border: none; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 14px; cursor: pointer; box-shadow: 0 4px 15px rgba(255, 71, 126, 0.4); outline: none; transition: all 0.2s ease;">
+        <option value="./model /model.vrm" style="color: black;">🌸 Model 1</option>
+        <option value="./model /model1.vrm" style="color: black;">🎀 Model 2</option>
+      </select>
     </div>
   </div>
 
@@ -44,22 +52,9 @@
   <!-- Dialogue input -->
   <div id="dialogue-panel">
     <div class="input-row">
-      <input
-        id="dialogue-input"
-        type="text"
-        placeholder="Say something to her…"
-        autocomplete="off"
-        spellcheck="false"
-      />
+      <input id="dialogue-input" type="text" placeholder="Say something to her…" autocomplete="off"
+        spellcheck="false" />
       <button id="send-btn">Send ↩</button>
-    </div>
-    <div class="quick-btns">
-      <button class="quick-btn" data-text="Hello! How are you?">👋 Hello</button>
-      <button class="quick-btn" data-text="I love you so much!">💜 Love</button>
-      <button class="quick-btn" data-text="Are you okay? I'm worried.">😟 Worried</button>
-      <button class="quick-btn" data-text="Let me think about that...">🤔 Thinking</button>
-      <button class="quick-btn" data-text="That's amazing! I'm so excited!">🎉 Excited</button>
-      <button class="quick-btn" data-text="I'm sorry...">🙏 Apologize</button>
     </div>
   </div>
 
@@ -69,10 +64,13 @@
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/",
-      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@2.1.2/lib/three-vrm.module.js"
+      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.js",
+      "@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3/lib/three-vrm-animation.module.js",
+      "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"
     }
   }
   </script>
   <script type="module" src="main.js"></script>
 </body>
+
 </html>

@@ -14,7 +14,10 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { VRMLoaderPlugin, VRMUtils } from '@pixiv/three-vrm';
+import { VRMLoaderPlugin, VRMUtils, VRMLookAt } from '@pixiv/three-vrm';
+import { createVRMAnimationClip, VRMAnimationLoaderPlugin, VRMLookAtQuaternionProxy } from '@pixiv/three-vrm-animation';
+import { loadMixamoAnimation } from './loadMixamoAnimation.js';
+import { handleAction } from './actionHandler.js';
 
 // ─────────────────────────────────────────────────
 // SCENE SETUP
@@ -31,13 +34,13 @@ renderer.toneMappingExposure = 1.1;
 container.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-scene.fog = new THREE.FogExp2(0x0a0a14, 0.035);
+scene.fog = new THREE.FogExp2(0xffffff, 0.035);
 
 const camera = new THREE.PerspectiveCamera(26, window.innerWidth / window.innerHeight, 0.1, 100);
-camera.position.set(0, 1.52, 2.0);
+camera.position.set(0, 1.15, 2.5); // Zoomed in (~20%) and lifted to upper torso
 
 const controls = new OrbitControls(camera, renderer.domElement);
-controls.target.set(0, 1.42, 0);
+controls.target.set(0, 1.15, 0); // Focus on upper body (face down to waist)
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.minDistance = 0.6;
@@ -45,23 +48,23 @@ controls.maxDistance = 5;
 controls.update();
 
 // Lights
-const ambientLight = new THREE.AmbientLight(0xfff0ff, 0.75);
+const ambientLight = new THREE.AmbientLight(0xffffff, 0.9);
 scene.add(ambientLight);
 const keyLight = new THREE.DirectionalLight(0xfff8ff, 2.2);
 keyLight.position.set(1, 3, 2.5);
 keyLight.castShadow = true;
 scene.add(keyLight);
-const fillLight = new THREE.DirectionalLight(0xc084fc, 0.55);
+const fillLight = new THREE.DirectionalLight(0xe2e8f0, 0.8);
 fillLight.position.set(-2, 2, -1);
 scene.add(fillLight);
-const rimLight = new THREE.DirectionalLight(0x818cf8, 0.7);
+const rimLight = new THREE.DirectionalLight(0xc7d2fe, 0.6);
 rimLight.position.set(0, 2, -3);
 scene.add(rimLight);
 
 // Floor
 const floorMesh = new THREE.Mesh(
   new THREE.PlaneGeometry(10, 10),
-  new THREE.MeshStandardMaterial({ color: 0x0d0d1a, roughness: 0.85, transparent: true, opacity: 0.5 })
+  new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 1.0, metalness: 0.1 })
 );
 floorMesh.rotation.x = -Math.PI / 2;
 floorMesh.receiveShadow = true;
@@ -110,70 +113,269 @@ const TextPhoneme = {
    * Convert text string → array of phoneme events
    * Each event: { shape: string|null, weight: number, duration: number }
    */
-  parse(text) {
+  parse(text, targetDuration = 0) {
     const events = [];
-    for (let i = 0; i < text.length; i++) {
-      const ch = text[i];
-      if (ch === ' ' || ch === '\n') {
-        events.push({ shape: null, weight: 0, duration: this.SPACE_DURATION });
+    let totalDur = 0;
+
+    // Split text into words and punctuation
+    const tokens = text.split(/([\s.,!?~…\-;:'"()]+)/);
+
+    for (const token of tokens) {
+      if (!token) continue;
+
+      // If punctuation/whitespace
+      if (/^[\s.,!?~…\-;:'"()]+$/.test(token)) {
+        const isLongPause = /[.,!?~…]/.test(token);
+        const d = isLongPause ? 0.3 : 0.08;
+        events.push({ shape: null, weight: 0, duration: d });
+        totalDur += d;
         continue;
       }
-      if (/[.,!?~…\-;:'"()]/.test(ch)) {
-        events.push({ shape: null, weight: 0, duration: this.CHAR_DURATION * 0.5 });
-        continue;
+
+      // Process word by finding vowels (syllable beats)
+      const vowels = token.match(/[aeiouyAEIOUY]/g);
+      if (vowels && vowels.length > 0) {
+        const d = 0.12; // ~120ms per syllable
+        for (const v of vowels) {
+          const [shape, weight] = this.CHAR_MAP[v] || this.CHAR_MAP[v.toLowerCase()] || ['aa', 0.6];
+          events.push({ shape, weight, duration: d });
+          totalDur += d;
+
+          // Tiny micro-close between syllables to make mouth flap distinguishable
+          events.push({ shape: null, weight: 0.1, duration: 0.03 });
+          totalDur += 0.03;
+        }
+      } else {
+        // Word with no standard vowels (e.g. "hmm", "shh")
+        const d = 0.15;
+        events.push({ shape: 'ih', weight: 0.4, duration: d });
+        totalDur += d;
       }
-      const [shape, weight] = this.CHAR_MAP[ch] ?? this.CHAR_MAP.default;
-      // Skip emoji / non-latin characters
-      if (ch.codePointAt(0) > 127) {
-        events.push({ shape: null, weight: 0, duration: this.CHAR_DURATION * 0.4 });
-        continue;
-      }
-      events.push({ shape, weight, duration: this.CHAR_DURATION });
+
+      // Brief pause after every word so words don't blur into a single open mouth
+      events.push({ shape: null, weight: 0, duration: 0.06 });
+      totalDur += 0.06;
     }
+
+    // Scale to exact audio duration if available
+    if (targetDuration > 0 && targetDuration !== Infinity && totalDur > 0) {
+      const scale = targetDuration / totalDur;
+      for (const ev of events) ev.duration *= scale;
+    }
+
     return events;
   },
 };
 
 // ─────────────────────────────────────────────────
-// VRM LOADER
+// VRM LOADER & ADVANCED LOOKAT
 // ─────────────────────────────────────────────────
 let currentVRM = null;
+let currentMixer = null;
+let currentAction = null;
+
+class VRMSmoothLookAt extends VRMLookAt {
+  constructor(humanoid, applier) {
+    super(humanoid, applier);
+    this.smoothFactor = 7.0; // Dampens physics bouncing
+    this.yawLimit = 40.0;
+    this.pitchLimit = 35.0;
+    this._yawDamped = 0.0;
+    this._pitchDamped = 0.0;
+  }
+  update(delta) {
+    if (this.target && this.autoUpdate) {
+      const _v3 = new THREE.Vector3();
+      this.lookAt(this.target.getWorldPosition(_v3));
+      // Clamp neck limits based on avatar design
+      if (this.yawLimit < Math.abs(this._yaw) || this.pitchLimit < Math.abs(this._pitch)) {
+        this._yaw = 0.0;
+        this._pitch = 0.0;
+      }
+      // Damped smooth pursuit
+      const k = 1.0 - Math.exp(-this.smoothFactor * delta);
+      this._yawDamped += (this._yaw - this._yawDamped) * k;
+      this._pitchDamped += (this._pitch - this._pitchDamped) * k;
+      this.applier.applyYawPitch(this._yawDamped, this._pitchDamped);
+      this._needsUpdate = false;
+    }
+    if (this._needsUpdate) {
+      this._needsUpdate = false;
+      this.applier.applyYawPitch(this._yaw, this._pitch);
+    }
+  }
+}
+
 const loader = new GLTFLoader();
+const lookAtTarget = new THREE.Object3D();
+scene.add(lookAtTarget); // The invisible point she looks at
+lookAtTarget.position.set(0, 1.4, 3.0);
 loader.register(p => new VRMLoaderPlugin(p));
+loader.register(p => new VRMAnimationLoaderPlugin(p));
 
 const setLoadingText = t => {
   const el = document.getElementById('loading-text');
   if (el) el.textContent = t;
 };
 
-loader.load('./model.vrm',
-  (gltf) => {
-    const vrm = gltf.userData.vrm;
-    if (!vrm) { setLoadingText('Error: VRM data missing.'); return; }
+function loadVRMModel(url) {
+  // Show loading overlay
+  const overlay = document.getElementById('loading-overlay');
+  if (overlay) overlay.classList.remove('hidden');
+  setLoadingText('Loading VRM model…');
 
-    VRMUtils.removeUnnecessaryJoints(gltf.scene);
-    VRMUtils.removeUnnecessaryVertices(gltf.scene);
-    vrm.scene.traverse(o => { if (o.isMesh) o.castShadow = true; });
-    VRMUtils.rotateVRM0(vrm);
-    scene.add(vrm.scene);
-    currentVRM = vrm;
-    window.currentVRM = vrm;
+  loader.load(url,
+    (gltf) => {
+      const vrm = gltf.userData.vrm;
+      if (!vrm) { setLoadingText('Error: VRM data missing.'); return; }
 
-    if (vrm.expressionManager?.expressionMap) {
-      console.log('[VRM] Expressions:', Object.keys(vrm.expressionManager.expressionMap).join(', '));
+      // Cleanup existing VRM if it exists
+      if (currentVRM) {
+        scene.remove(currentVRM.scene);
+      }
+      if (currentMixer) {
+        currentMixer.stopAllAction();
+      }
+
+      VRMUtils.removeUnnecessaryJoints(gltf.scene);
+      VRMUtils.removeUnnecessaryVertices(gltf.scene);
+      vrm.scene.traverse(o => { if (o.isMesh) o.castShadow = true; });
+      VRMUtils.rotateVRM0(vrm);
+
+      // Swap out lookAt for our advanced Smooth pursuit
+      if (vrm.lookAt) {
+        const smoothLookAt = new VRMSmoothLookAt(vrm.humanoid, vrm.lookAt.applier);
+        smoothLookAt.copy(vrm.lookAt);
+        vrm.lookAt = smoothLookAt;
+        vrm.lookAt.target = lookAtTarget;
+      }
+
+      // Add look at quaternion proxy to the VRM (needed for VRMA lookAt animations)
+      const lookAtQuatProxy = new VRMLookAtQuaternionProxy(vrm.lookAt);
+      lookAtQuatProxy.name = 'lookAtQuaternionProxy';
+      vrm.scene.add(lookAtQuatProxy);
+
+      scene.add(vrm.scene);
+      currentVRM = vrm;
+      window.currentVRM = vrm;
+
+      // Create AnimationMixer for VRM
+      currentMixer = new THREE.AnimationMixer(currentVRM.scene);
+
+      // Fade back to the procedural body (idle) when an animation finishes playing
+      currentMixer.addEventListener('finished', (e) => {
+        if (currentAction === e.action) {
+          currentAction.fadeOut(0.8);
+          setTimeout(() => {
+            if (currentAction === e.action) {
+              currentAction.stop();
+              currentAction = null;
+            }
+          }, 800);
+        }
+      });
+
+      if (vrm.expressionManager?.expressionMap) {
+        console.log('[VRM] Expressions:', Object.keys(vrm.expressionManager.expressionMap).join(', '));
+      }
+
+      if (overlay) {
+        overlay.classList.add('hidden');
+      }
+
+      face.init(vrm);
+
+      // Only connect WS and init UI if they haven't been initialized yet
+      if (!window.hasInitializedOnce) {
+        window.hasInitializedOnce = true;
+        ws.connect();
+        ui.init();
+      }
+    },
+    prog => {
+      // Avoid dividing by zero or undefined
+      const total = prog.total > 0 ? prog.total : prog.loaded;
+      setLoadingText(`Loading… ${Math.round((prog.loaded / total) * 100)}%`);
+    },
+    (e) => { setLoadingText('Error loading VRM.'); console.error(e); }
+  );
+}
+
+// Initial Load
+loadVRMModel('./model /model.vrm');
+
+// Listen to Model Dropdown
+document.addEventListener('DOMContentLoaded', () => {
+  const modelSelect = document.getElementById('model-select');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', (e) => {
+      const selectedModelUrl = e.target.value;
+      console.log(`[UI] Switching model to: ${selectedModelUrl}`);
+      loadVRMModel(selectedModelUrl);
+    });
+  }
+});
+
+// ─────────────────────────────────────────────────
+// MIXAMO FBX & VRMA DRAG & DROP
+// ─────────────────────────────────────────────────
+async function loadFBX(animationUrl) {
+  if (currentMixer && currentVRM) {
+    console.log('[Mixamo] Loading FBX:', animationUrl);
+    try {
+      const clip = await loadMixamoAnimation(animationUrl, currentVRM);
+      const newAction = currentMixer.clipAction(clip);
+      newAction.setLoop(THREE.LoopOnce, 1);
+      newAction.clampWhenFinished = true;
+      newAction.reset().play();
+      if (currentAction && currentAction !== newAction) {
+        currentAction.crossFadeTo(newAction, 0.5, false);
+      }
+      currentAction = newAction;
+    } catch (err) {
+      console.error('[Mixamo] Failed to load FBX', err);
     }
+  }
+}
 
-    const overlay = document.getElementById('loading-overlay');
-    overlay.classList.add('hidden');
-    setTimeout(() => overlay.remove(), 900);
+async function loadVRMA(animationUrl) {
+  if (currentMixer && currentVRM) {
+    console.log('[VRMA] Loading VRMA:', animationUrl);
+    try {
+      const gltfVrma = await loader.loadAsync(animationUrl);
+      const vrmAnimation = gltfVrma.userData.vrmAnimations[0];
+      const clip = createVRMAnimationClip(vrmAnimation, currentVRM);
+      const newAction = currentMixer.clipAction(clip);
+      newAction.setLoop(THREE.LoopOnce, 1);
+      newAction.clampWhenFinished = true;
+      newAction.reset().play();
+      if (currentAction && currentAction !== newAction) {
+        currentAction.crossFadeTo(newAction, 0.5, false);
+      }
+      currentAction = newAction;
+    } catch (err) {
+      console.error('[VRMA] Failed to load VRMA', err);
+    }
+  }
+}
 
-    face.init(vrm);
-    ws.connect();
-    ui.init();
-  },
-  prog => setLoadingText(`Loading… ${Math.round((prog.loaded / (prog.total || 1)) * 100)}%`),
-  err => { console.error(err); setLoadingText('Failed to load model.vrm'); }
-);
+window.addEventListener('dragover', (e) => e.preventDefault());
+window.addEventListener('drop', (e) => {
+  e.preventDefault();
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  const fileType = file.name.split('.').pop().toLowerCase();
+
+  const blob = new Blob([file], { type: 'application/octet-stream' });
+  const url = URL.createObjectURL(blob);
+
+  if (fileType === 'fbx') {
+    loadFBX(url);
+  } else if (fileType === 'vrma') {
+    loadVRMA(url);
+  }
+  // Optional: could handle dropping .vrm here too, but out of scope
+});
 
 // ─────────────────────────────────────────────────
 // FACE CONTROLLER
@@ -203,11 +405,18 @@ const face = {
   _exprTarget: {},   // { shapeName: targetWeight }
   _activeExpr: 'neutral',
 
-  // Blink
-  _blinkTimer: 0,
-  _blinkCooldown: 2.5,
-  _blinkPhase: 0,
-  _blinking: false,
+  // Ultra-Realistic Blink & Expressions
+  _blinkTimer: 3,
+  _blinkState: 'idle',
+  _blinkProg: 0,
+  _blinkDur: 0.1,
+  _blinkAsym: 0,
+
+  // Mood Drifting
+  _moodTimer: 5,
+  _currentMood: 'relaxed',
+  _moodWeight: 0,
+  _targetMoodWeight: 0,
 
   // Lip sync (text-driven queue)
   _phonQueue: [],   // array of { shape, weight, duration }
@@ -220,11 +429,14 @@ const face = {
   // Head look
   _headX: 0, _headY: 0, _tgX: 0, _tgY: 0,
   _mouseActive: false,
+  _lookTimer: 0,        // time until next random look
+  _lookHoldTime: 4,     // how long to hold current gaze
 
   // ── Init ──
   init(vrm) {
     this.vrm = vrm;
-    this._blinkCooldown = 2 + Math.random() * 3;
+    this._blinkTimer = 2 + Math.random() * 3;
+
     // Initialize expression weights to 0
     const allNames = [...new Set(Object.values(this.EXPR_NAMES))];
     allNames.forEach(n => { this._exprCurrent[n] = 0; this._exprTarget[n] = 0; });
@@ -255,15 +467,15 @@ const face = {
   returnToNeutral() { this.setEmotion('neutral'); },
 
   // ── Start Speaking (text-driven) ──
-  startSpeaking(text) {
+  startSpeaking(text, duration = 0) {
     // Build phoneme queue from actual text
-    this._phonQueue = TextPhoneme.parse(text);
+    this._phonQueue = TextPhoneme.parse(text, duration);
     this._phonTimer = 0;
     this._phonCurrent = null;
     this._speaking = true;
     // Clear all lip targets
     this.LIP_SHAPES.forEach(n => { this._lipTarget[n] = 0; });
-    console.log(`[LipSync] Phonemes: ${this._phonQueue.length} events for: "${text.slice(0, 40)}…"`);
+    console.log(`[LipSync] Phonemes: ${this._phonQueue.length} events, target duration: ${duration.toFixed(2)}s for: "${text.slice(0, 40)}…"`);
   },
 
   stopSpeaking() {
@@ -274,8 +486,49 @@ const face = {
   },
 
   setHeadLook(x, y) {
-    this._tgX = Math.max(-0.35, Math.min(0.35, x));
-    this._tgY = Math.max(-0.25, Math.min(0.25, y));
+    // Map abstract -1 to 1 into real world meters relative to her head (Z=3ish)
+    this._tgX = -x * 1.5;
+    this._tgY = 1.4 - y * 1.0;
+  },
+
+  // ── Ultra-Realistic Expressions ──
+  _handleExpressions(em, delta) {
+    if (!em) return;
+
+    // 1. Crisp Symmetrical Blinking (Anime models look uncanny with asymmetrical twitches)
+    this._blinkTimer -= delta;
+    if (this._blinkTimer <= 0) {
+      this._blinkState = 'closing';
+      this._blinkTimer = 2 + Math.random() * 4; // natural interval
+      this._blinkDur = 0.08; // extremely fast, snappy blink
+      this._blinkProg = 0;
+    }
+
+    if (this._blinkState !== 'idle') {
+      this._blinkProg += delta / this._blinkDur;
+      if (this._blinkState === 'closing') {
+        if (this._blinkProg >= 1) {
+          this._blinkProg = 1;
+          this._blinkState = 'opening';
+        }
+      } else {
+        if (this._blinkProg >= 2) {
+          this._blinkProg = 0;
+          this._blinkState = 'idle';
+        }
+      }
+      const amt = this._blinkState === 'closing' ? this._blinkProg : (2 - this._blinkProg);
+      em.setValue('blink', Math.max(0, Math.min(1, amt)));
+    } else {
+      em.setValue('blink', 0);
+    }
+
+    // 2. Pleasant Baseline (Avoid Dead Stare)
+    // Instead of random 10% deformities, VRMs look best when resting cleanly
+    if (!this._speaking && this._activeExpr === 'neutral') {
+      // Faint, stable smile so she feels warm and alive, not robotic
+      em.setValue('happy', 0.15);
+    }
   },
 
   // ── Main Update ──
@@ -285,7 +538,6 @@ const face = {
     const hum = this.vrm.humanoid;
 
     // ─ 1. Expression smooth cross-fade ─
-    // Speed: reach target in ~0.35s (feels natural, not too fast not too slow)
     const exprSpeed = Math.min(1, delta * 5.5);
     for (const name of Object.keys(this._exprCurrent)) {
       const tgt = this._exprTarget[name] ?? 0;
@@ -293,116 +545,217 @@ const face = {
       if (Math.abs(tgt - cur) < 0.001) { this._exprCurrent[name] = tgt; continue; }
       const next = cur + (tgt - cur) * exprSpeed;
       this._exprCurrent[name] = next;
+      // ONLY set value here if it's the active macro emotion, Micro-expressions handle themselves
       if (em) try { em.setValue(name, Math.max(0, Math.min(1, next))); } catch (_) { }
     }
 
-    // ─ 2. Blink ─
-    this._blinkTimer += delta;
-    if (!this._blinking && this._blinkTimer >= this._blinkCooldown) {
-      this._blinking = true;
-      this._blinkPhase = 0;
-      this._blinkTimer = 0;
-      this._blinkCooldown = 2 + Math.random() * 4;
-    }
-    if (this._blinking) {
-      this._blinkPhase += delta;
-      const CLOSE = 0.07, HOLD = 0.04, OPEN = 0.09, TOTAL = 0.20;
-      let bv = 0;
-      if (this._blinkPhase < CLOSE) bv = this._blinkPhase / CLOSE;
-      else if (this._blinkPhase < CLOSE + HOLD) bv = 1;
-      else if (this._blinkPhase < TOTAL) bv = 1 - (this._blinkPhase - CLOSE - HOLD) / OPEN;
-      else { bv = 0; this._blinking = false; }
-      const blinkVal = Math.max(0, Math.min(1, bv));
-      for (const n of this.BLINK_SHAPES) {
-        if (em) try { em.setValue(n, blinkVal); } catch (_) { }
-      }
-    }
-
-    // ─ 3. TEXT-DRIVEN LIP SYNC ─
+    // ─ 2. TEXT-DRIVEN LIP SYNC ─
+    let vocalIntensity = 0; // measure how "active" the mouth is
     if (this._speaking) {
       this._phonTimer += delta;
 
-      // If no current phoneme or current has expired, advance to next
       if (!this._phonCurrent || this._phonTimer >= this._phonCurrent.duration) {
         if (this._phonQueue.length > 0) {
           this._phonCurrent = this._phonQueue.shift();
           this._phonTimer = 0;
-
-          // Update lip targets: clear all, then set just the new shape
           this.LIP_SHAPES.forEach(n => { this._lipTarget[n] = 0; });
           if (this._phonCurrent.shape) {
-            // Add subtle weight variation for naturalness
-            const variation = 0.88 + Math.random() * 0.24;
-            this._lipTarget[this._phonCurrent.shape] =
-              Math.min(1, this._phonCurrent.weight * variation);
+            const variation = 0.50 + Math.random() * 0.30;
+            this._lipTarget[this._phonCurrent.shape] = Math.min(1, this._phonCurrent.weight * variation);
           }
         } else {
-          // Queue exhausted → stop speaking
           this.stopSpeaking();
           setTimeout(() => this.returnToNeutral(), 500);
         }
       }
     }
 
-    // Smooth lerp all lip shapes toward their targets (key to smooth feel)
-    // Speed: ~0.12s to reach target — fast enough to track phonemes but smooth
-    const lipSpeed = Math.min(1, delta * 14);
+    const lipSpeed = Math.min(1, delta * 12);
     for (const name of this.LIP_SHAPES) {
       const tgt = this._lipTarget[name] ?? 0;
       const cur = this._lipCurrent[name] ?? 0;
       const next = cur + (tgt - cur) * lipSpeed;
       this._lipCurrent[name] = next;
+      vocalIntensity += next; // accumulate total mouth openness
       if (em && (next > 0.01 || cur > 0.01)) {
         try { em.setValue(name, Math.max(0, Math.min(1, next))); } catch (_) { }
       }
     }
 
-    // ─ 4. Head look (idle drift + mouse follow) ─
+    // ─ 3. Micro-Expressions & Blinking ─
+    this._handleExpressions(em, delta);
+
+    // ─ 4. Head Look ─
+    // Timer-based drift to update the Object3D target
     if (!this._mouseActive) {
-      this._tgX = Math.sin(elapsed * 0.31) * 0.022 + Math.sin(elapsed * 0.87) * 0.009;
-      this._tgY = Math.cos(elapsed * 0.27) * 0.013;
-    }
-    const headSpeed = Math.min(1, delta * 4.5);
-    this._headX += (this._tgX - this._headX) * headSpeed;
-    this._headY += (this._tgY - this._headY) * headSpeed;
-    if (hum) {
-      const head = hum.getNormalizedBoneNode('head');
-      const neck = hum.getNormalizedBoneNode('neck');
-      if (head) { head.rotation.y = this._headX; head.rotation.x = this._headY; }
-      if (neck) { neck.rotation.y = this._headX * 0.3; neck.rotation.x = this._headY * 0.3; }
+      this._lookTimer -= delta;
+      if (this._lookTimer <= 0) {
+        if (this._speaking) {
+          // Minimal drift forward
+          this._tgX = (Math.random() - 0.5) * 0.3;
+          this._tgY = 1.4 + (Math.random() - 0.5) * 0.15;
+        } else {
+          // Occasional broader glance
+          this._tgX = (Math.random() - 0.5) * 1.5;
+          this._tgY = 1.4 + (Math.random() - 0.5) * 0.6;
+        }
+        this._lookHoldTime = 3 + Math.random() * 5;
+        this._lookTimer = this._lookHoldTime;
+      }
     }
 
-    // ─ 5. Standing arm pose (enforced every frame before vrm.update) ─
-    this._standPose(hum);
+    // Ultra-smooth physical object interpolation
+    const tgtSpeed = Math.min(1, delta * (this._mouseActive ? 4.0 : 1.2));
+    lookAtTarget.position.x += (this._tgX - lookAtTarget.position.x) * tgtSpeed;
+    lookAtTarget.position.y += (this._tgY - lookAtTarget.position.y) * tgtSpeed;
+    lookAtTarget.position.z = 2.5; // lock depth of focal point point so it's realistically in front of her
+
+    // (Native VRMSmoothLookAt updates the actual head/neck/bones in vrm.update)
+
+    // ─ 5. Procedural Body ─
+    // Only apply procedural math if a Mixamo FBX animation is NOT playing!
+    if (!currentAction) {
+      this._proceduralBody(hum, elapsed);
+    }
 
     // ─ 6. Flush expression manager ─
     if (em) em.update();
   },
 
-  _standPose(hum) {
+  _proceduralBody(hum, elapsed) {
     if (!hum) return;
-    // Arms hang at sides: Z-rotation lowers arm from T-pose
+
+    // Organic Waves (Multi-frequency)
+    const breath = (Math.sin(elapsed * 1.5) + Math.sin(elapsed * 0.8)) * 0.5;
+    const sway = (Math.sin(elapsed * 0.5) + Math.sin(elapsed * 1.1)) * 0.5;
+    const headMod = Math.sin(elapsed * 2.3) * Math.sin(elapsed * 3.7);
+
+    const chest = hum.getNormalizedBoneNode('chest');
+    const upperChest = hum.getNormalizedBoneNode('upperChest');
+    const spine = hum.getNormalizedBoneNode('spine');
+    const hips = hum.getNormalizedBoneNode('hips');
+    const neck = hum.getNormalizedBoneNode('neck');
+    const head = hum.getNormalizedBoneNode('head');
+    const lShol = hum.getNormalizedBoneNode('leftShoulder');
+    const rShol = hum.getNormalizedBoneNode('rightShoulder');
     const lArm = hum.getNormalizedBoneNode('leftUpperArm');
     const rArm = hum.getNormalizedBoneNode('rightUpperArm');
     const lLow = hum.getNormalizedBoneNode('leftLowerArm');
     const rLow = hum.getNormalizedBoneNode('rightLowerArm');
-    const lHand = hum.getNormalizedBoneNode('leftHand');
-    const rHand = hum.getNormalizedBoneNode('rightHand');
-    const spine = hum.getNormalizedBoneNode('spine');
-    const chest = hum.getNormalizedBoneNode('chest');
 
-    if (lArm) { lArm.rotation.x = 0.08; lArm.rotation.y = 0; lArm.rotation.z = -1.4; }
-    if (rArm) { rArm.rotation.x = 0.08; rArm.rotation.y = 0; rArm.rotation.z = 1.4; }
-    if (lLow) { lLow.rotation.x = 0.05; lLow.rotation.y = 0; lLow.rotation.z = 0; }
-    if (rLow) { rLow.rotation.x = 0.05; rLow.rotation.y = 0; rLow.rotation.z = 0; }
-    if (lHand) { lHand.rotation.x = 0; lHand.rotation.z = -0.08; }
-    if (rHand) { rHand.rotation.x = 0; rHand.rotation.z = 0.08; }
-    if (spine) { spine.rotation.x = -0.02; }
-    if (chest) { chest.rotation.x = -0.02; }
+    // 1. Breathing (Chest expands, shoulders lift subtly)
+    if (chest) chest.rotation.x = -0.01 + breath * 0.01;
+    if (upperChest) upperChest.rotation.x = breath * 0.005;
+    if (lShol) lShol.rotation.z = breath * 0.02;
+    if (rShol) rShol.rotation.z = -breath * 0.02;
+
+    // 2. Weight Shift (Hips sway laterally, spine counter-balances to keep head centered)
+    if (hips) hips.rotation.z = sway * 0.02;
+    if (spine) {
+      spine.rotation.x = -0.02 + breath * 0.005;
+      spine.rotation.z = -sway * 0.02; // Opposite of hips
+    }
+
+    // 3. Postural micro-movements on neck and head
+    if (neck) {
+      neck.rotation.z = headMod * 0.01;
+      neck.rotation.x = headMod * 0.01;
+    }
+    if (head) {
+      head.rotation.z = headMod * 0.005;
+    }
+
+    // 4. Relaxed, hanging arms dynamically influenced by breath
+    if (lArm) lArm.rotation.set(0.08, 0, -1.35 - breath * 0.005);
+    if (rArm) rArm.rotation.set(0.08, 0, 1.35 + breath * 0.005);
+    if (lLow) lLow.rotation.set(0.1, 0, 0);
+    if (rLow) rLow.rotation.set(0.1, 0, 0);
   },
 
   onMouseEnter() { this._mouseActive = true; },
   onMouseLeave() { this._mouseActive = false; },
+};
+
+// ─────────────────────────────────────────────────
+// BASE64 → BLOB URL HELPER
+// ─────────────────────────────────────────────────
+function b64ToObjectUrl(b64) {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return URL.createObjectURL(new Blob([bytes], { type: 'audio/mpeg' }));
+}
+
+// ─────────────────────────────────────────────────
+// TTS AUDIO QUEUE
+// ─────────────────────────────────────────────────
+const ttsPlayer = {
+  _queue: [],
+  _playing: false,
+  _neutralTimer: null,
+  _currentAudio: null,
+
+  enqueue(b64, text, emotion) {
+    clearTimeout(this._neutralTimer);
+    this._queue.push({ b64, text, emotion });
+    if (!this._playing) this._playNext();
+  },
+
+  _playNext() {
+    if (this._queue.length === 0) {
+      this._playing = false;
+      face.stopSpeaking();
+      this._neutralTimer = setTimeout(() => face.returnToNeutral(), 1500);
+      return;
+    }
+    this._playing = true;
+    const { b64, text, emotion } = this._queue.shift();
+
+    let objUrl;
+    try { objUrl = b64ToObjectUrl(b64); }
+    catch (e) { console.warn('[TTS] Decode error:', e); this._playing = false; this._playNext(); return; }
+
+    const audio = new Audio(objUrl);
+    this._currentAudio = audio;
+
+    const onPlaying = () => {
+      if (emotion) face.setEmotion(emotion);
+      face.startSpeaking(text, audio.duration);
+    };
+    audio.addEventListener('playing', onPlaying, { once: true });
+
+    audio.addEventListener('ended', () => {
+      face.stopSpeaking();
+      URL.revokeObjectURL(objUrl);
+      this._currentAudio = null;
+      this._playNext();
+    }, { once: true });
+
+    audio.addEventListener('error', () => {
+      console.warn('[TTS] Audio error');
+      face.stopSpeaking();
+      URL.revokeObjectURL(objUrl);
+      this._currentAudio = null;
+      this._playNext();
+    }, { once: true });
+
+    audio.play().catch(e => {
+      console.warn('[TTS] play() failed:', e);
+      face.stopSpeaking();
+      URL.revokeObjectURL(objUrl);
+      this._currentAudio = null;
+      this._playing = false;
+      this._playNext();
+    });
+  },
+
+  clear() {
+    this._queue = [];
+    if (this._currentAudio) { this._currentAudio.pause(); this._currentAudio = null; }
+    face.stopSpeaking();
+    clearTimeout(this._neutralTimer);
+    this._playing = false;
+  },
 };
 
 // ─────────────────────────────────────────────────
@@ -421,31 +774,57 @@ const ws = {
   },
 
   send(text) {
-    if (this.socket?.readyState === WebSocket.OPEN)
+    if (this.socket?.readyState === WebSocket.OPEN) {
+      ttsPlayer.clear();
       this.socket.send(JSON.stringify({ type: 'user_message', text }));
+      // Show thinking state
+      const el = document.getElementById('subtitle-text');
+      if (el) { el.textContent = '💭 Thinking…'; el.classList.add('visible'); }
+      face.setEmotion('thinking');
+    }
   },
 
   _handle(cmd) {
-    console.log('[WS]', cmd);
+    console.log('[WS]', cmd.type, cmd.emotion || '', (cmd.text || '').slice(0, 50));
     if (cmd.type !== 'dialogue') return;
 
     // Subtitle
     const el = document.getElementById('subtitle-text');
     if (el) {
-      el.textContent = cmd.text || '';
+      if (cmd.first || !cmd.streaming) {
+        el.textContent = cmd.text || '';
+      } else {
+        el.textContent += ' ' + (cmd.text || '');
+      }
       el.classList.add('visible');
       clearTimeout(el._t);
       el._t = setTimeout(
         () => el.classList.remove('visible'),
-        Math.max(3000, (cmd.text?.length || 0) * 70)
+        Math.max(4000, (el.textContent?.length || 0) * 80)
       );
     }
 
-    // Emotion first (smooth fade-in)
-    if (cmd.emotion) face.setEmotion(cmd.emotion);
+    if (cmd.audioB64) {
+      ttsPlayer.enqueue(cmd.audioB64, cmd.text, cmd.emotion);
+    } else if (cmd.emotion) {
+      face.setEmotion(cmd.emotion);
+    }
 
-    // Text-driven lip sync
-    if (cmd.lipSync && cmd.text) face.startSpeaking(cmd.text);
+    // Process LLM Action (Dance/Pose)
+    if (cmd.action) {
+      console.log(`[WS] Action received: ${cmd.action}`);
+      handleAction(cmd.action, currentVRM, currentMixer, loader).then(newAction => {
+        if (newAction) {
+          newAction.setLoop(THREE.LoopOnce, 1);
+          newAction.clampWhenFinished = true;
+          newAction.reset().play();
+          if (currentAction && currentAction !== newAction) {
+            currentAction.crossFadeTo(newAction, 0.5, false);
+          }
+          currentAction = newAction;
+        }
+      });
+    }
   },
 
   _status(state) {
@@ -510,13 +889,20 @@ const ui = {
 const clock = new THREE.Clock();
 function animate() {
   requestAnimationFrame(animate);
-  const delta = Math.min(clock.getDelta(), 0.05);
+  const delta = Math.min(clock.getDelta(), 0.05); // capped at 50ms
   const elapsed = clock.getElapsedTime();
+
   controls.update();
+
+  if (currentMixer) {
+    currentMixer.update(delta);
+  }
+
   if (currentVRM) {
     face.update(delta, elapsed);   // ← sets normalized bones + expressions
     currentVRM.update(delta);      // ← converts normalized→raw + spring physics
   }
+
   renderer.render(scene, camera);
 }
 animate();

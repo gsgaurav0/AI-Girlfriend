@@ -1,22 +1,30 @@
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Noto+Sans+JP:wght@300;400&display=swap');
 
 :root {
-  --bg: #0a0a14;
-  --glass: rgba(255,255,255,0.05);
-  --glass-border: rgba(255,255,255,0.12);
-  --accent: #c084fc;
-  --accent2: #818cf8;
-  --text: #f0e6ff;
-  --text-dim: rgba(240,230,255,0.5);
-  --glow: rgba(192,132,252,0.25);
-  --danger: #f87171;
-  --success: #86efac;
+  --bg: #ffffff;
+  --glass: rgba(255, 255, 255, 0.85);
+  --glass-border: rgba(0, 0, 0, 0.08);
+  --accent: #9333ea;
+  --accent2: #4f46e5;
+  --text: #1e293b;
+  --text-dim: #64748b;
+  --glow: rgba(147, 51, 234, 0.15);
+  --danger: #ef4444;
+  --success: #22c55e;
 }
 
-*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
 
-html, body {
-  width: 100%; height: 100%;
+html,
+body {
+  width: 100%;
+  height: 100%;
   overflow: hidden;
   background: var(--bg);
   font-family: 'Inter', 'Noto Sans JP', sans-serif;
@@ -42,8 +50,8 @@ canvas {
   inset: 0;
   z-index: 0;
   background:
-    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(120, 80, 200, 0.18) 0%, transparent 70%),
-    radial-gradient(ellipse 50% 40% at 20% 20%, rgba(100, 60, 180, 0.10) 0%, transparent 60%),
+    radial-gradient(ellipse 80% 60% at 50% 100%, rgba(147, 51, 234, 0.08) 0%, transparent 70%),
+    radial-gradient(ellipse 50% 40% at 20% 20%, rgba(79, 70, 229, 0.05) 0%, transparent 60%),
     var(--bg);
   pointer-events: none;
 }
@@ -51,13 +59,15 @@ canvas {
 /* ── Top bar ── */
 #topbar {
   position: fixed;
-  top: 0; left: 0; right: 0;
+  top: 0;
+  left: 0;
+  right: 0;
   z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
   padding: 14px 24px;
-  background: rgba(10,10,20,0.7);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(20px);
   border-bottom: 1px solid var(--glass-border);
 }
@@ -72,7 +82,8 @@ canvas {
 }
 
 .topbar-title .dot {
-  width: 9px; height: 9px;
+  width: 9px;
+  height: 9px;
   border-radius: 50%;
   background: var(--accent);
   box-shadow: 0 0 10px var(--accent);
@@ -80,8 +91,17 @@ canvas {
 }
 
 @keyframes pulse-dot {
-  0%,100% { opacity: 1; transform: scale(1); }
-  50% { opacity: 0.5; transform: scale(0.7); }
+
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(0.7);
+  }
 }
 
 .topbar-status {
@@ -93,13 +113,22 @@ canvas {
 }
 
 #ws-indicator {
-  width: 8px; height: 8px;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
   background: #6b7280;
   transition: background 0.4s, box-shadow 0.4s;
 }
-#ws-indicator.connected { background: var(--success); box-shadow: 0 0 8px var(--success); }
-#ws-indicator.error { background: var(--danger); box-shadow: 0 0 8px var(--danger); }
+
+#ws-indicator.connected {
+  background: var(--success);
+  box-shadow: 0 0 8px var(--success);
+}
+
+#ws-indicator.error {
+  background: var(--danger);
+  box-shadow: 0 0 8px var(--danger);
+}
 
 /* ── Emotion badge ── */
 #emotion-badge {
@@ -120,7 +149,10 @@ canvas {
   transition: all 0.4s ease;
   opacity: 0;
 }
-#emotion-badge.visible { opacity: 1; }
+
+#emotion-badge.visible {
+  opacity: 1;
+}
 
 /* ── Subtitle / response area ── */
 #subtitle-area {
@@ -138,18 +170,20 @@ canvas {
 #subtitle-text {
   display: inline-block;
   padding: 12px 22px;
-  background: rgba(10,10,20,0.75);
+  background: rgba(255, 255, 255, 0.9);
   border: 1px solid var(--glass-border);
   border-radius: 14px;
   backdrop-filter: blur(18px);
   font-size: 1.05rem;
   line-height: 1.6;
   color: var(--text);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.05);
   opacity: 0;
   transform: translateY(10px);
   transition: opacity 0.4s ease, transform 0.4s ease;
   max-width: 100%;
 }
+
 #subtitle-text.visible {
   opacity: 1;
   transform: translateY(0);
@@ -158,10 +192,12 @@ canvas {
 /* ── Dialogue input panel ── */
 #dialogue-panel {
   position: fixed;
-  bottom: 0; left: 0; right: 0;
+  bottom: 0;
+  left: 0;
+  right: 0;
   z-index: 10;
   padding: 20px 24px;
-  background: rgba(10,10,20,0.8);
+  background: rgba(255, 255, 255, 0.85);
   backdrop-filter: blur(24px);
   border-top: 1px solid var(--glass-border);
 }
@@ -186,10 +222,14 @@ canvas {
   outline: none;
   transition: border 0.3s, box-shadow 0.3s;
 }
-#dialogue-input::placeholder { color: var(--text-dim); }
+
+#dialogue-input::placeholder {
+  color: var(--text-dim);
+}
+
 #dialogue-input:focus {
   border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(192,132,252,0.15);
+  box-shadow: 0 0 0 3px rgba(192, 132, 252, 0.15);
 }
 
 #send-btn {
@@ -203,12 +243,24 @@ canvas {
   font-family: inherit;
   cursor: pointer;
   transition: transform 0.15s, box-shadow 0.3s, opacity 0.3s;
-  box-shadow: 0 4px 20px rgba(192,132,252,0.35);
+  box-shadow: 0 4px 20px rgba(192, 132, 252, 0.35);
   white-space: nowrap;
 }
-#send-btn:hover { transform: translateY(-1px); box-shadow: 0 6px 28px rgba(192,132,252,0.5); }
-#send-btn:active { transform: translateY(0); }
-#send-btn:disabled { opacity: 0.5; cursor: not-allowed; transform: none; }
+
+#send-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 28px rgba(192, 132, 252, 0.5);
+}
+
+#send-btn:active {
+  transform: translateY(0);
+}
+
+#send-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
+}
 
 /* ── Quick emotion presets ── */
 .quick-btns {
@@ -230,8 +282,9 @@ canvas {
   cursor: pointer;
   transition: all 0.2s;
 }
+
 .quick-btn:hover {
-  background: rgba(192,132,252,0.12);
+  background: rgba(192, 132, 252, 0.12);
   border-color: var(--accent);
   color: var(--accent);
 }
@@ -249,19 +302,26 @@ canvas {
   gap: 20px;
   transition: opacity 0.8s ease;
 }
+
 #loading-overlay.hidden {
   opacity: 0;
   pointer-events: none;
 }
 
 .loader-ring {
-  width: 56px; height: 56px;
-  border: 3px solid rgba(192,132,252,0.15);
+  width: 56px;
+  height: 56px;
+  border: 3px solid rgba(192, 132, 252, 0.15);
   border-top-color: var(--accent);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
 }
-@keyframes spin { to { transform: rotate(360deg); } }
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
 
 .loader-text {
   font-size: 0.85rem;
@@ -270,6 +330,15 @@ canvas {
 }
 
 /* ── Scrollbar ── */
-::-webkit-scrollbar { width: 4px; }
-::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--glass-border); border-radius: 2px; }
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--glass-border);
+  border-radius: 2px;
+}
