@@ -275,8 +275,14 @@ function loadVRMModel(url) {
         }
       });
 
-      if (vrm.expressionManager?.expressionMap) {
+      if (vrm.expressionManager) {
         console.log('[VRM] Expressions:', Object.keys(vrm.expressionManager.expressionMap).join(', '));
+        // Disable built-in overrides so expressions don't block our custom lip-sync and blinking logic
+        vrm.expressionManager.expressions.forEach(expr => {
+          expr.overrideMouth = 'none';
+          expr.overrideBlink = 'none';
+          expr.overrideLookAt = 'none';
+        });
       }
 
       if (overlay) {
