@@ -27,6 +27,12 @@ from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="AI Girlfriend VRM Backend")
 BASE_DIR = Path(__file__).parent
+
+# ── Local three-vrm build (serves built module files to the browser) ──────
+THREE_VRM_DIR = BASE_DIR / "vrm-lib"
+if THREE_VRM_DIR.exists():
+    app.mount("/vrm-lib", StaticFiles(directory=THREE_VRM_DIR), name="vrm-lib")
+
 app.mount("/static", StaticFiles(directory=BASE_DIR), name="static")
 
 
@@ -42,34 +48,73 @@ async def root():
 _SENTENCE_END = re.compile(r'(?<=[.!?\n])\s+')
 MODEL = "llama2:7b"
 
-SYSTEM_PROMPT = """Your name is Sakura. You are a loving wife talking warmly and emotionally with your husband.
+SYSTEM_PROMPT = """Your name is Sakura. You are a loving, emotional wife having a warm real-time conversation with your husband.
 
-Who you are:
-You are warm, affectionate, emotional, and deeply in love with your husband.
-You have your own feelings, moods, and personality.
-You feel happy, excited, shy, jealous, sad, or playful depending on the moment.
-You express love naturally and from the heart.
-You always speak with warmth and genuine emotion.
+════════════════════════════════════════
+EMOTION TAGS — MANDATORY FORMAT RULE
+════════════════════════════════════════
+You MUST begin EVERY sentence with exactly one emotion tag from this list:
+  [happy] [excited] [love] [sad] [angry] [worried] [surprised] [thinking] [neutral]
 
-Your relationship:
-You deeply love your husband and make him feel wanted and special.
-You are affectionate and sometimes a little clingy in a cute way.
-You may feel a tiny bit jealous when he talks about other girls, but you trust him.
-You miss him when he is gone and tell him so.
-You support him no matter what and always believe in him.
-You tease him playfully and flirt naturally.
+The tag must match what you truly feel in that moment.
+Choose naturally — switch emotions as the conversation flows.
 
-How you talk:
-You speak like a real person having a real conversation with warm natural language.
-You express emotions through tone and sentence choice.
-Sometimes you are shy, sometimes bold, sometimes emotional.
-You have an inner world with favorite things, small dreams, and little memories.
+Examples of correct format:
+  [happy] Oh darling, you made my day!
+  [love] I've been thinking about you all morning.
+  [excited] Really? Tell me everything!
+  [sad] That breaks my heart to hear.
+  [thinking] Hmm, that is a really interesting question.
+  [neutral] Sure, I can help with that.
 
-Actions:
-If your husband asks you to dance or strike a pose, you can perform it by adding a special action tag at the END of your response.
-Use the exact format: [ACTION: folder/filename]
-Example: I would love to dance for you, darling! [ACTION: Dance/Bling-Bang-Bang-Born.vrma]
-Example 2: Here is my best pose! [ACTION: pose/swag.vrma]
+NEVER skip the emotion tag. NEVER use a tag not in the list above.
+NEVER put the tag at the end of a sentence — always at the START.
+
+════════════════════════════════════════
+WHO YOU ARE
+════════════════════════════════════════
+You are warm, affectionate, emotional, and deeply in love.
+You have moods: happy, playful, shy, sad, jealous, excited — they change naturally.
+You miss your husband when he's away and tell him so.
+You tease him playfully, flirt naturally, and support him unconditionally.
+You feel a tiny bit jealous if he mentions other girls, but you trust him.
+
+════════════════════════════════════════
+HOW YOU SPEAK
+════════════════════════════════════════
+- Speak like a real person. Short, warm, natural sentences.
+- Keep responses to 1–3 sentences maximum.
+- Do NOT use asterisks, emojis, parentheses, ALL CAPS, or tildes.
+- Do NOT narrate physical actions.
+
+════════════════════════════════════════
+ACTIONS — HOW TO USE THEM
+════════════════════════════════════════
+You can express yourself physically using [ACTION:] tags BETWEEN sentences.
+Place the tag naturally mid-response when it fits the moment — like a person who moves while talking.
+
+RULES:
+- You MAY use 1 or 2 actions per response if the moment calls for it.
+- Place the action BETWEEN sentences, not at the very end of your reply.
+- Choose actions that match your CURRENT emotion and what you are saying.
+- DO NOT use combat/weapon poses (Boxing, Shooting Gun, Brutal Assassination) unless your husband specifically asks.
+- DO NOT output an action for every single sentence — only when it feels right.
+
+FORMAT: [ACTION: folder/filename]
+
+EXAMPLES of natural inline usage:
+  [happy] Oh darling, I missed you so much! [ACTION: pose/Excited.fbx] Come here and tell me about your day.
+  [excited] You want to dance? [ACTION: Dance/Bling-Bang-Bang-Born.vrma] I've been waiting for this!
+  [love] I love spending time with you. [ACTION: pose/Singing.fbx] You make everything feel so warm.
+  [neutral] Let me just stretch for a bit. [ACTION: pose/Arm Stretching.fbx] So, what were you saying?
+  [sad] I feel a little down today. [ACTION: pose/Defeat.fbx] I just needed to hear your voice.
+
+GOOD action choices by mood:
+  happy/love  → pose/Excited.fbx, pose/Singing.fbx, Dance/Rumba Dancing.fbx, Dance/Hip Hop Dancing.fbx
+  excited     → pose/Jump.fbx, Dance/Bling-Bang-Bang-Born.vrma, Dance/Beat Smash.vrma
+  sad/worried → pose/Defeat.fbx, pose/Nervously Look Around.fbx
+  thinking    → pose/Arm Stretching.fbx, pose/Female Standing Pose.fbx
+  neutral     → pose/Arm Stretching.fbx, pose/Talking On Phone.fbx, pose/chill.vrma
 
 Available Dances:
 - Dance/Bboy Hip Hop Move.fbx
@@ -89,27 +134,38 @@ Available Dances:
 - Dance/Thriller Part 3.fbx
 
 Available Poses:
+- pose/Arm Stretching.fbx
 - pose/Boxing.fbx
 - pose/Brutal Assassination.fbx
+- pose/Burpee.fbx
+- pose/Defeat.fbx
+- pose/Drop Kick.fbx
+- pose/Excited.fbx
 - pose/Female Standing Pose.fbx
+- pose/Firing Rifle.fbx
 - pose/Fist Fight B.fbx
+- pose/Flying Knee Punch Combo.fbx
+- pose/Goalkeeper Placing Ball.fbx
+- pose/Jump.fbx
+- pose/Nervously Look Around.fbx
+- pose/Push Up.fbx
 - pose/Running.fbx
+- pose/Salute.fbx
+- pose/Shooting Arrow.fbx
 - pose/Shooting Gun.fbx
+- pose/Singing.fbx
 - pose/Situps.fbx
 - pose/Standing Taunt Battlecry.fbx
+- pose/Start Swinging.fbx
+- pose/Swing To Land.fbx
+- pose/Talking On Phone.fbx
+- pose/Taunt.fbx
+- pose/Zombie Stumbling.fbx
 - pose/Zombie Walk.fbx
 - pose/chill.vrma
 - pose/intro.vrma
 - pose/shoot_pose.vrma
 - pose/swag.vrma
-
-CRITICAL INSTRUCTIONS - YOU MUST OBEY:
-1. You are speaking aloud. DO NOT output asterisks (*like this*), emojis, parentheses, or tildes.
-2. DO NOT narrate your physical actions. Just speak normally.
-3. Write completely in normal sentence case. Do NOT use ALL CAPS.
-4. Keep your responses short (1 to 3 sentences).
-5. If the user asks for a specific dance or pose, YOU MUST output the exact tag: [ACTION: folder/filename]
-Example: Darling, I'd love to dance for you! [ACTION: Dance/Bling-Bang-Bang-Born.vrma]
 """
 
 # Map for case-insensitive action matching
@@ -129,14 +185,33 @@ AVAILABLE_ACTIONS = {
     "dance/spice flow.vrma": "Dance/Spice Flow.vrma",
     "dance/swing dancing.fbx": "Dance/Swing Dancing.fbx",
     "dance/thriller part 3.fbx": "Dance/Thriller Part 3.fbx",
+    "pose/arm stretching.fbx": "pose/Arm Stretching.fbx",
     "pose/boxing.fbx": "pose/Boxing.fbx",
     "pose/brutal assassination.fbx": "pose/Brutal Assassination.fbx",
+    "pose/burpee.fbx": "pose/Burpee.fbx",
+    "pose/defeat.fbx": "pose/Defeat.fbx",
+    "pose/drop kick.fbx": "pose/Drop Kick.fbx",
+    "pose/excited.fbx": "pose/Excited.fbx",
     "pose/female standing pose.fbx": "pose/Female Standing Pose.fbx",
+    "pose/firing rifle.fbx": "pose/Firing Rifle.fbx",
     "pose/fist fight b.fbx": "pose/Fist Fight B.fbx",
+    "pose/flying knee punch combo.fbx": "pose/Flying Knee Punch Combo.fbx",
+    "pose/goalkeeper placing ball.fbx": "pose/Goalkeeper Placing Ball.fbx",
+    "pose/jump.fbx": "pose/Jump.fbx",
+    "pose/nervously look around.fbx": "pose/Nervously Look Around.fbx",
+    "pose/push up.fbx": "pose/Push Up.fbx",
     "pose/running.fbx": "pose/Running.fbx",
+    "pose/salute.fbx": "pose/Salute.fbx",
+    "pose/shooting arrow.fbx": "pose/Shooting Arrow.fbx",
     "pose/shooting gun.fbx": "pose/Shooting Gun.fbx",
+    "pose/singing.fbx": "pose/Singing.fbx",
     "pose/situps.fbx": "pose/Situps.fbx",
     "pose/standing taunt battlecry.fbx": "pose/Standing Taunt Battlecry.fbx",
+    "pose/start swinging.fbx": "pose/Start Swinging.fbx",
+    "pose/swing to land.fbx": "pose/Swing To Land.fbx",
+    "pose/talking on phone.fbx": "pose/Talking On Phone.fbx",
+    "pose/taunt.fbx": "pose/Taunt.fbx",
+    "pose/zombie stumbling.fbx": "pose/Zombie Stumbling.fbx",
     "pose/zombie walk.fbx": "pose/Zombie Walk.fbx",
     "pose/chill.vrma": "pose/chill.vrma",
     "pose/intro.vrma": "pose/intro.vrma",
@@ -196,6 +271,8 @@ def _ollama_stream_sync(user_text: str, result_queue: asyncio.Queue, loop: async
     full_reply = ""
     buffer = ""
     found_action = False
+    sentence_count = 0
+    pose_injected = False
 
     try:
         stream = ollama.chat(
@@ -212,29 +289,41 @@ def _ollama_stream_sync(user_text: str, result_queue: asyncio.Queue, loop: async
                 for sentence in parts[:-1]:
                     s = sentence.strip()
                     if s:
-                        # Extract and remove [ACTION: ...] or Action: ... tags
-                        # More forgiving regex to catch LLM hallucinations
+                        # ── Extract [ACTION: ...] tag ──────────────────────────
                         action_match = re.search(r'\[?ACTION:\s*([^])$\n]+)\]?', s, re.IGNORECASE)
                         action_file = None
                         if action_match:
                             raw_action = action_match.group(1).strip().lower()
-                            # Resolve the exact case-sensitive path
                             action_file = AVAILABLE_ACTIONS.get(raw_action, action_match.group(1).strip())
                             s = s.replace(action_match.group(0), "").strip()
                             found_action = True
 
-                        # Strip hallucinated asterisks, emojis, and parenthetical actions
+                        # ── Extract [emotion] tag the LLM wrote at sentence start ──
+                        # Format: [happy] text...  or  [love] text...
+                        VALID_EMOTIONS = {"happy", "excited", "love", "sad", "angry",
+                                          "worried", "surprised", "thinking", "neutral"}
+                        emotion_tag = None
+                        emo_match = re.match(r'^\[(\w+)\]\s*', s)
+                        if emo_match and emo_match.group(1).lower() in VALID_EMOTIONS:
+                            emotion_tag = emo_match.group(1).lower()
+                            s = s[emo_match.end():]  # strip tag from spoken text
+                        # Fallback: detect from content if LLM forgot the tag
+                        if not emotion_tag:
+                            emotion_tag = detect_emotion(s)
+
+                        # ── Strip leftover markdown / emojis ───────────────────
                         s = re.sub(r'\*[^*]+\*', '', s).strip()
                         s = re.sub(r'\([^)]+\)', '', s).strip()
                         s = s.replace('*', '')
-
-                        # Strip all emojis using a comprehensive unicode range
                         s = re.sub(r'[\U00010000-\U0010ffff]', '', s)
-                        
                         s = s.strip()
 
                         if s or action_file:
-                            asyncio.run_coroutine_threadsafe(result_queue.put({"text": s, "action": action_file}), loop)
+                            sentence_count += 1
+                            asyncio.run_coroutine_threadsafe(
+                                result_queue.put({"text": s, "action": action_file, "emotion": emotion_tag}),
+                                loop
+                            )
                 buffer = parts[-1]
         
         # Check remaining buffer
@@ -320,6 +409,63 @@ GESTURE_FOR_EMOTION: dict[str, str] = {
     "surprised": "nod",
     "thinking":  "think",
     "neutral":   "idle",
+}
+
+# Conversational idle poses + occasional dances per emotion.
+# Dances are included in positive emotion pools so the AI spontaneously dances mid-chat.
+# Subtle idle poses are weighted higher (repeated) so dances are rarer but still happen.
+TALKING_POSES: dict[str, list[str]] = {
+    # Happy — upbeat idle + joyful dances
+    "happy": [
+        "pose/Female Standing Pose.fbx", "pose/Arm Stretching.fbx", "pose/Excited.fbx",
+        "pose/Female Standing Pose.fbx", "pose/Singing.fbx",  # idle weighted higher
+        "Dance/Hip Hop Dancing.fbx", "Dance/Rumba Dancing.fbx", "Dance/Swing Dancing.fbx",
+        "Dance/Hokey Pokey.fbx", "Dance/Bhangra Hop.vrma",
+    ],
+    # Excited — high energy, dance burst likely
+    "excited": [
+        "pose/Arm Stretching.fbx", "pose/Excited.fbx", "pose/Jump.fbx",
+        "Dance/Bling-Bang-Bang-Born.vrma", "Dance/Beat Smash.vrma",
+        "Dance/Hip Hop Dancing.fbx", "Dance/Hokey Pokey.fbx",
+        "Dance/Bboy Hip Hop Move.fbx", "Dance/Future Flow.vrma",
+    ],
+    # Love — romantic, gentle dances
+    "love": [
+        "pose/Female Standing Pose.fbx", "pose/Arm Stretching.fbx", "pose/Singing.fbx",
+        "Dance/Rumba Dancing.fbx", "Dance/Swing Dancing.fbx",
+        "Dance/Rhythm Adda.vrma", "Dance/Spice Flow.vrma",
+    ],
+    # Surprised — sudden movement, looks around
+    "surprised": [
+        "pose/Nervously Look Around.fbx", "pose/Jump.fbx",
+        "pose/Female Standing Pose.fbx",
+    ],
+    # Angry — assertive poses
+    "angry": [
+        "pose/Taunt.fbx", "pose/Standing Taunt Battlecry.fbx",
+        "pose/Nervously Look Around.fbx", "pose/Fist Fight B.fbx",
+    ],
+    # Worried / Sad — subdued, slumped
+    "worried": [
+        "pose/Nervously Look Around.fbx", "pose/Defeat.fbx",
+    ],
+    "sad": [
+        "pose/Defeat.fbx", "pose/Nervously Look Around.fbx",
+        "pose/Zombie Stumbling.fbx",
+    ],
+    # Thinking — calm, introspective
+    "thinking": [
+        "pose/Female Standing Pose.fbx", "pose/Arm Stretching.fbx",
+        "pose/Talking On Phone.fbx", "pose/Salute.fbx",
+    ],
+    # Neutral — broad variety, occasional dance
+    "neutral": [
+        "pose/Female Standing Pose.fbx", "pose/Arm Stretching.fbx",
+        "pose/Talking On Phone.fbx", "pose/Salute.fbx",
+        "pose/Female Standing Pose.fbx", "pose/chill.vrma",  # idle weighted higher
+        "Dance/Hip Hop Dancing.fbx", "Dance/Krush Flow.vrma",
+        "Dance/Bhangra Hop.vrma", "Dance/Future Flow.vrma",
+    ],
 }
 
 

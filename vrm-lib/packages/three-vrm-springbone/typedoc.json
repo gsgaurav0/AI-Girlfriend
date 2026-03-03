@@ -1,0 +1,4 @@
+{
+  "name": "three-vrm-springbone",
+  "entryPoints": ["src/index.ts"]
+}

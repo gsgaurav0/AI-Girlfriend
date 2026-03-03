@@ -16,8 +16,20 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { VRMLoaderPlugin, VRMUtils, VRMLookAt } from '@pixiv/three-vrm';
 import { createVRMAnimationClip, VRMAnimationLoaderPlugin, VRMLookAtQuaternionProxy } from '@pixiv/three-vrm-animation';
+import { VRMSpringBoneJointHelper, VRMSpringBoneColliderHelper } from '@pixiv/three-vrm-springbone';
 import { loadMixamoAnimation } from './loadMixamoAnimation.js';
 import { handleAction } from './actionHandler.js';
+import { savePose, restorePose, resetPose } from './poseHelper.js';
+
+// ── Advanced Feature Flags (toggle via browser console) ─────────────────────
+// window.debugSpringBone = true  → show spring bone collider/joint helpers
+// window.debugFirstPerson = true → switch camera to first-person layer
+window.debugSpringBone = window.debugSpringBone ?? false;
+
+// Expose Humanoid Pose API globally for console use
+window.savePose = () => currentVRM ? savePose(currentVRM) : null;
+window.restorePose = (pose) => currentVRM && restorePose(currentVRM, pose);
+window.resetPose = () => currentVRM && resetPose(currentVRM);
 
 // ─────────────────────────────────────────────────
 // SCENE SETUP
@@ -76,96 +88,109 @@ window.addEventListener('resize', () => {
   renderer.setSize(window.innerWidth, window.innerHeight);
 });
 
-// ─────────────────────────────────────────────────
-// TEXT → PHONEME CONVERTER
-// Maps each character in the response text to a blendshape + timing.
-// VRM blendshapes available: aa, ih, ou, ee, oh
-// ─────────────────────────────────────────────────
-const TextPhoneme = {
-  // Character → [blendshapeName, weight]
-  // Vowels drive the mouth open, consonants give slight movement
-  CHAR_MAP: {
-    a: ['aa', 0.85], A: ['aa', 0.85],
-    e: ['ee', 0.55], E: ['ee', 0.55],
-    i: ['ih', 0.50], I: ['ih', 0.50], y: ['ih', 0.35], Y: ['ih', 0.35],
-    o: ['oh', 0.70], O: ['oh', 0.70],
-    u: ['ou', 0.50], U: ['ou', 0.50],
-    // Bilabials (b, m, p) → slight close then open  
-    b: ['aa', 0.15], m: ['aa', 0.10], p: ['aa', 0.12],
-    B: ['aa', 0.15], M: ['aa', 0.10], P: ['aa', 0.12],
-    // Labio-dentals (f, v)
-    f: ['ih', 0.20], v: ['ih', 0.20], F: ['ih', 0.20], V: ['ih', 0.20],
-    // Rounded fricatives (w)
-    w: ['ou', 0.30], W: ['ou', 0.30],
-    // Other consonants → small aa
-    default: ['aa', 0.18],
-    // Space / punctuation → silence (mouth closes)
-    ' ': [null, 0], '\n': [null, 0],
-    '.': [null, 0], ',': [null, 0], '!': [null, 0],
-    '?': [null, 0], '~': [null, 0], '…': [null, 0],
+// ─────────────────────────────────────────────────────────────────────────
+// REAL-TIME AUDIO LIP SYNC  (Web Audio API FFT)
+//
+// The audio element is routed through an AnalyserNode. Each animation frame
+// we read the FFT frequency bins and map them to VRM mouth shapes:
+//
+//   Bass  0-1.4 kHz  → aa / oh  (open jaw, round open)
+//   Mid   1.4-4 kHz  → ou / oh  (round forward)
+//   High  4-8 kHz    → ee / ih  (spread / narrow)
+//
+// This gives PERFECT sync because the mouth is driven by the actual audio
+// signal, not by a text-guessing timer.
+// ─────────────────────────────────────────────────────────────────────────
+const AudioLipSync = {
+  ctx: null,
+  analyser: null,
+  source: null,
+  data: null,
+  active: false,
+  _s: { aa: 0, ee: 0, ih: 0, oh: 0, ou: 0 }, // smoothed weights
+
+  _init() {
+    if (this.ctx) return;
+    this.ctx = new (window.AudioContext || window.webkitAudioContext)();
+    this.analyser = this.ctx.createAnalyser();
+    this.analyser.fftSize = 256;
+    this.analyser.smoothingTimeConstant = 0.55;
+    this.data = new Uint8Array(this.analyser.frequencyBinCount);
+    this.analyser.connect(this.ctx.destination);
   },
 
-  // Seconds per character (average speech rate ~120 wpm ≈ 10 chars/sec)
-  CHAR_DURATION: 0.09,
-  SPACE_DURATION: 0.07,
+  connect(audioEl) {
+    this._init();
+    if (this.ctx.state === 'suspended') this.ctx.resume();
+    if (this.source) { try { this.source.disconnect(); } catch (_) { } }
+    try {
+      this.source = this.ctx.createMediaElementSource(audioEl);
+      this.source.connect(this.analyser);
+      this.active = true;
+    } catch (e) {
+      console.warn('[AudioLipSync] connect failed:', e.message);
+      this.active = false;
+    }
+  },
 
-  /**
-   * Convert text string → array of phoneme events
-   * Each event: { shape: string|null, weight: number, duration: number }
-   */
-  parse(text, targetDuration = 0) {
-    const events = [];
-    let totalDur = 0;
+  stop() {
+    this.active = false;
+    const s = this._s;
+    Object.keys(s).forEach(k => { s[k] = 0; });
+  },
 
-    // Split text into words and punctuation
-    const tokens = text.split(/([\s.,!?~…\-;:'"()]+)/);
+  getWeights() {
+    const s = this._s;
+    if (!this.active || !this.analyser) {
+      Object.keys(s).forEach(k => { s[k] *= 0.7; });
+      return s;
+    }
+    this.analyser.getByteFrequencyData(this.data);
 
-    for (const token of tokens) {
-      if (!token) continue;
+    const band = (lo, hi) => {
+      let sum = 0;
+      for (let i = lo; i <= hi; i++) sum += this.data[i];
+      return sum / ((hi - lo + 1) * 255);
+    };
 
-      // If punctuation/whitespace
-      if (/^[\s.,!?~…\-;:'"()]+$/.test(token)) {
-        const isLongPause = /[.,!?~…]/.test(token);
-        const d = isLongPause ? 0.3 : 0.08;
-        events.push({ shape: null, weight: 0, duration: d });
-        totalDur += d;
-        continue;
-      }
+    // bin width ≈ 344 Hz for 44.1kHz/256-point FFT
+    const bass = band(0, 3);    // 0–1.4 kHz
+    const mid = band(4, 10);   // 1.4–3.8 kHz
+    const high = band(11, 22);  // 3.8–8 kHz
 
-      // Process word by finding vowels (syllable beats)
-      const vowels = token.match(/[aeiouyAEIOUY]/g);
-      if (vowels && vowels.length > 0) {
-        const d = 0.12; // ~120ms per syllable
-        for (const v of vowels) {
-          const [shape, weight] = this.CHAR_MAP[v] || this.CHAR_MAP[v.toLowerCase()] || ['aa', 0.6];
-          events.push({ shape, weight, duration: d });
-          totalDur += d;
-
-          // Tiny micro-close between syllables to make mouth flap distinguishable
-          events.push({ shape: null, weight: 0.1, duration: 0.03 });
-          totalDur += 0.03;
-        }
-      } else {
-        // Word with no standard vowels (e.g. "hmm", "shh")
-        const d = 0.15;
-        events.push({ shape: 'ih', weight: 0.4, duration: d });
-        totalDur += d;
-      }
-
-      // Brief pause after every word so words don't blur into a single open mouth
-      events.push({ shape: null, weight: 0, duration: 0.06 });
-      totalDur += 0.06;
+    const loudness = (bass + mid + high) / 3;
+    if (loudness < 0.018) {
+      Object.keys(s).forEach(k => { s[k] *= 0.80; });
+      return s;
     }
 
-    // Scale to exact audio duration if available
-    if (targetDuration > 0 && targetDuration !== Infinity && totalDur > 0) {
-      const scale = targetDuration / totalDur;
-      for (const ev of events) ev.duration *= scale;
-    }
+    const total = bass + mid + high + 1e-6;
+    const bR = bass / total;
+    const mR = mid / total;
+    const hR = high / total;
 
-    return events;
+    // Scale down the overall intensity. VRM blendshapes at 1.0 can be very extreme
+    // and clip through the chin on many models.
+    const SCALE = 0.5;
+    const raw = {
+      aa: loudness * Math.pow(bR, 0.45) * SCALE,
+      oh: loudness * Math.pow(bR * 0.5 + mR * 0.5, 0.55) * SCALE,
+      ou: loudness * Math.pow(mR, 0.60) * SCALE,
+      ee: loudness * Math.pow(hR, 0.45) * SCALE,
+      ih: loudness * Math.pow(mR * 0.35 + hR * 0.65, 0.60) * SCALE,
+    };
+
+    const RISE = 0.40, FALL = 0.22;
+    Object.keys(s).forEach(k => {
+      const tgt = Math.min(1, raw[k] ?? 0);
+      s[k] += (tgt > s[k] ? RISE : FALL) * (tgt - s[k]);
+    });
+
+    return s;
   },
 };
+
+
 
 // ─────────────────────────────────────────────────
 // VRM LOADER & ADVANCED LOOKAT
@@ -212,6 +237,14 @@ scene.add(lookAtTarget); // The invisible point she looks at
 lookAtTarget.position.set(0, 1.4, 3.0);
 loader.register(p => new VRMLoaderPlugin(p));
 loader.register(p => new VRMAnimationLoaderPlugin(p));
+
+// ── Advanced Feature: Track debug helpers for cleanup on model swap ───────
+let _springBoneDebugHelpers = [];
+
+function _cleanupSpringBoneHelpers() {
+  _springBoneDebugHelpers.forEach(h => h.parent?.remove(h));
+  _springBoneDebugHelpers = [];
+}
 
 const setLoadingText = t => {
   const el = document.getElementById('loading-text');
@@ -283,6 +316,55 @@ function loadVRMModel(url) {
           expr.overrideBlink = 'none';
           expr.overrideLookAt = 'none';
         });
+      }
+
+      // ── ADVANCED FEATURE 1: FirstPerson Mesh Culling ─────────────────────
+      // Reads VRM annotation data to set up layer masks for first/third person.
+      if (vrm.firstPerson) {
+        vrm.firstPerson.setup();
+        console.log('[VRM] FirstPerson mesh culling layers set up.');
+
+        // Fix for blank screen: FirstPerson moves third-person meshes to layer 10 by default!
+        // We MUST tell the camera to render this layer, otherwise the model turns invisible.
+        camera.layers.enable(vrm.firstPerson.thirdPersonOnlyLayer);
+
+        // To enable first-person view instead in the future:
+        //   camera.layers.disable(vrm.firstPerson.thirdPersonOnlyLayer);
+        //   camera.layers.enable(vrm.firstPerson.firstPersonOnlyLayer);
+      }
+
+      // ── ADVANCED FEATURE 2: SpringBone Initialization + Debug Helpers ────
+      if (vrm.springBoneManager) {
+        vrm.springBoneManager.setInitState();
+        console.log('[VRM] SpringBone physics initialized.');
+
+        // Cleanup old debug helpers from previous model swap
+        _cleanupSpringBoneHelpers();
+
+        if (window.debugSpringBone) {
+          // Visualize spring bone joints (shows the bone chain + hit radius spheres)
+          vrm.springBoneManager.joints.forEach(joint => {
+            const helper = new VRMSpringBoneJointHelper(joint);
+            vrm.scene.add(helper);
+            _springBoneDebugHelpers.push(helper);
+          });
+          // Visualize collider shapes (sphere/capsule/plane volumes)
+          vrm.springBoneManager.colliderGroups.forEach(group => {
+            group.colliders.forEach(collider => {
+              const helper = new VRMSpringBoneColliderHelper(collider);
+              vrm.scene.add(helper);
+              _springBoneDebugHelpers.push(helper);
+            });
+          });
+          console.log(`[VRM] SpringBone debug: ${_springBoneDebugHelpers.length} helpers added.`);
+        }
+      }
+
+      // ── ADVANCED FEATURE 3: Node Constraint Initialization ──────────────
+      // Constraints (Aim/Roll/Rotation) are loaded automatically by VRMLoaderPlugin.
+      // They will be updated each frame in the render loop before vrm.update().
+      if (vrm.nodeConstraintManager) {
+        console.log('[VRM] Node Constraints loaded:', vrm.nodeConstraintManager.constraints.size, 'constraint(s).');
       }
 
       if (overlay) {
@@ -389,17 +471,37 @@ window.addEventListener('drop', (e) => {
 const face = {
   vrm: null,
 
-  // Expression presets (exact blendshape names from this VRM)
+  // Expression presets — maps ALL emotions the LLM sends to VRM presets.
+  // VRM available: happy, angry, sad, relaxed, surprised, neutral
   EXPR_NAMES: {
+    // Positive
     happy: 'happy',
-    sad: 'sad',
-    angry: 'angry',
-    surprised: 'surprised',
-    thinking: 'relaxed',
-    neutral: 'neutral',
     excited: 'happy',
-    worried: 'sad',
     love: 'happy',
+    joy: 'happy',
+    // Negative
+    sad: 'sad',
+    worried: 'sad',
+    upset: 'sad',
+    lonely: 'sad',
+    // Angry
+    angry: 'angry',
+    annoyed: 'angry',
+    frustrated: 'angry',
+    stress: 'angry',    // closest VRM shape for stress
+    // Calm / Relaxed
+    relaxed: 'relaxed',
+    thinking: 'relaxed',
+    bored: 'relaxed',
+    tired: 'relaxed',
+    // Surprised
+    surprised: 'surprised',
+    shocked: 'surprised',
+    confused: 'surprised',
+    // Neutral baseline
+    neutral: 'neutral',
+    // Fallback for anything not mapped
+    _default: 'neutral',
   },
 
   BLINK_SHAPES: ['blink', 'blinkLeft', 'blinkRight'],
@@ -454,10 +556,10 @@ const face = {
 
   // ── Set Emotion ──
   setEmotion(key) {
-    const preset = this.EXPR_NAMES[key] || 'neutral';
+    const preset = this.EXPR_NAMES[key] ?? this.EXPR_NAMES['_default'] ?? 'neutral';
     if (preset === this._activeExpr) return;
-    // Fade out previous
-    this._exprTarget[this._activeExpr] = 0;
+    // Fade out previous expression
+    Object.keys(this._exprTarget).forEach(n => { this._exprTarget[n] = 0; });
     this._activeExpr = preset;
     this._exprTarget[preset] = 1;
     // Update badge
@@ -468,27 +570,20 @@ const face = {
       clearTimeout(badge._t);
       badge._t = setTimeout(() => badge.classList.remove('visible'), 4500);
     }
+    console.log(`[Face] Emotion: ${key} → ${preset}`);
   },
 
   returnToNeutral() { this.setEmotion('neutral'); },
 
-  // ── Start Speaking (text-driven) ──
-  startSpeaking(text, duration = 0) {
-    // Build phoneme queue from actual text
-    this._phonQueue = TextPhoneme.parse(text, duration);
-    this._phonTimer = 0;
-    this._phonCurrent = null;
+  // ── Start Speaking ──
+  startSpeaking() {
     this._speaking = true;
-    // Clear all lip targets
-    this.LIP_SHAPES.forEach(n => { this._lipTarget[n] = 0; });
-    console.log(`[LipSync] Phonemes: ${this._phonQueue.length} events, target duration: ${duration.toFixed(2)}s for: "${text.slice(0, 40)}…"`);
   },
 
   stopSpeaking() {
     this._speaking = false;
-    this._phonQueue = [];
-    // Close mouth
-    this.LIP_SHAPES.forEach(n => { this._lipTarget[n] = 0; });
+    // Stop the audio analyser so weights decay to 0
+    AudioLipSync.stop();
   },
 
   setHeadLook(x, y) {
@@ -497,31 +592,25 @@ const face = {
     this._tgY = 1.4 - y * 1.0;
   },
 
-  // ── Ultra-Realistic Expressions ──
+  // ── Ultra-Realistic Expressions (blink only — emotions cross-fade in update()) ──
   _handleExpressions(em, delta) {
     if (!em) return;
 
-    // 1. Crisp Symmetrical Blinking (Anime models look uncanny with asymmetrical twitches)
+    // 1. Crisp Symmetrical Blinking
     this._blinkTimer -= delta;
     if (this._blinkTimer <= 0) {
       this._blinkState = 'closing';
-      this._blinkTimer = 2 + Math.random() * 4; // natural interval
-      this._blinkDur = 0.08; // extremely fast, snappy blink
+      this._blinkTimer = 2 + Math.random() * 4;
+      this._blinkDur = 0.08;
       this._blinkProg = 0;
     }
 
     if (this._blinkState !== 'idle') {
       this._blinkProg += delta / this._blinkDur;
       if (this._blinkState === 'closing') {
-        if (this._blinkProg >= 1) {
-          this._blinkProg = 1;
-          this._blinkState = 'opening';
-        }
+        if (this._blinkProg >= 1) { this._blinkProg = 1; this._blinkState = 'opening'; }
       } else {
-        if (this._blinkProg >= 2) {
-          this._blinkProg = 0;
-          this._blinkState = 'idle';
-        }
+        if (this._blinkProg >= 2) { this._blinkProg = 0; this._blinkState = 'idle'; }
       }
       const amt = this._blinkState === 'closing' ? this._blinkProg : (2 - this._blinkProg);
       em.setValue('blink', Math.max(0, Math.min(1, amt)));
@@ -529,11 +618,12 @@ const face = {
       em.setValue('blink', 0);
     }
 
-    // 2. Pleasant Baseline (Avoid Dead Stare)
-    // Instead of random 10% deformities, VRMs look best when resting cleanly
+    // 2. Pleasant Baseline: faint warmth when idle, but DO NOT override active emotions
     if (!this._speaking && this._activeExpr === 'neutral') {
-      // Faint, stable smile so she feels warm and alive, not robotic
-      em.setValue('happy', 0.15);
+      // Blend faint happy into neutral so she doesn't look dead
+      const current = em.getValue('happy') ?? 0;
+      const target = 0.12;
+      em.setValue('happy', current + (target - current) * Math.min(1, delta * 3));
     }
   },
 
@@ -544,47 +634,41 @@ const face = {
     const hum = this.vrm.humanoid;
 
     // ─ 1. Expression smooth cross-fade ─
-    const exprSpeed = Math.min(1, delta * 5.5);
+    // We only drive the macro-emotion blendshapes here via setValue.
+    // Blink and lip shapes are handled in SEPARATE steps below.
+    // This avoids fighting with the expression manager's override system.
+    const exprSpeed = Math.min(1, delta * 4.5); // slightly slower = smoother cross-fade
     for (const name of Object.keys(this._exprCurrent)) {
+      // Skip lip / blink shapes — they are managed below
+      if (this.LIP_SHAPES.includes(name) || this.BLINK_SHAPES.includes(name)) continue;
       const tgt = this._exprTarget[name] ?? 0;
       const cur = this._exprCurrent[name] ?? 0;
-      if (Math.abs(tgt - cur) < 0.001) { this._exprCurrent[name] = tgt; continue; }
-      const next = cur + (tgt - cur) * exprSpeed;
-      this._exprCurrent[name] = next;
-      // ONLY set value here if it's the active macro emotion, Micro-expressions handle themselves
-      if (em) try { em.setValue(name, Math.max(0, Math.min(1, next))); } catch (_) { }
+      if (Math.abs(tgt - cur) < 0.002) { this._exprCurrent[name] = tgt; }
+      else { this._exprCurrent[name] = cur + (tgt - cur) * exprSpeed; }
+      if (em) try { em.setValue(name, Math.max(0, Math.min(1, this._exprCurrent[name]))); } catch (_) { }
     }
 
-    // ─ 2. TEXT-DRIVEN LIP SYNC ─
-    let vocalIntensity = 0; // measure how "active" the mouth is
-    if (this._speaking) {
-      this._phonTimer += delta;
-
-      if (!this._phonCurrent || this._phonTimer >= this._phonCurrent.duration) {
-        if (this._phonQueue.length > 0) {
-          this._phonCurrent = this._phonQueue.shift();
-          this._phonTimer = 0;
-          this.LIP_SHAPES.forEach(n => { this._lipTarget[n] = 0; });
-          if (this._phonCurrent.shape) {
-            const variation = 0.50 + Math.random() * 0.30;
-            this._lipTarget[this._phonCurrent.shape] = Math.min(1, this._phonCurrent.weight * variation);
-          }
-        } else {
-          this.stopSpeaking();
-          setTimeout(() => this.returnToNeutral(), 500);
+    // ─ 2. REAL-TIME AUDIO LIP SYNC ─
+    // AudioLipSync.getWeights() reads the live FFT every frame and returns
+    // per-shape weights that naturally follow the actual audio signal.
+    // When not speaking all weights decay to 0 automatically.
+    // ─ 2. REAL-TIME AUDIO LIP SYNC ─
+    // Only apply FFT weights when actually speaking. When silent, force all lip
+    // shapes to zero so the mouth closes cleanly between words/sentences.
+    if (em) {
+      if (this._speaking) {
+        const w = AudioLipSync.getWeights();
+        for (const name of this.LIP_SHAPES) {
+          const val = w[name] ?? 0;
+          this._lipCurrent[name] = val;
+          try { em.setValue(name, Math.max(0, Math.min(1, val))); } catch (_) { }
         }
-      }
-    }
-
-    const lipSpeed = Math.min(1, delta * 12);
-    for (const name of this.LIP_SHAPES) {
-      const tgt = this._lipTarget[name] ?? 0;
-      const cur = this._lipCurrent[name] ?? 0;
-      const next = cur + (tgt - cur) * lipSpeed;
-      this._lipCurrent[name] = next;
-      vocalIntensity += next; // accumulate total mouth openness
-      if (em && (next > 0.01 || cur > 0.01)) {
-        try { em.setValue(name, Math.max(0, Math.min(1, next))); } catch (_) { }
+      } else {
+        // Not speaking — decay all lip shapes quickly to zero
+        for (const name of this.LIP_SHAPES) {
+          this._lipCurrent[name] = (this._lipCurrent[name] ?? 0) * 0.6;
+          try { em.setValue(name, this._lipCurrent[name]); } catch (_) { }
+        }
       }
     }
 
@@ -624,8 +708,10 @@ const face = {
       this._proceduralBody(hum, elapsed);
     }
 
-    // ─ 6. Flush expression manager ─
-    if (em) em.update();
+    // NOTE: Do NOT call em.update() here.
+    // vrm.update(delta) in the render loop calls expressionManager.update() internally.
+    // Calling it twice caused expression overrides to fight each other and showed wrong
+    // emotion/vowel shapes. Let vrm.update() be the single authority for flushing.
   },
 
   _proceduralBody(hum, elapsed) {
@@ -724,17 +810,22 @@ const ttsPlayer = {
     const audio = new Audio(objUrl);
     this._currentAudio = audio;
 
+    // Route audio through the Web Audio analyser for real-time FFT lip sync
+    AudioLipSync.connect(audio);
+
     const onPlaying = () => {
       if (emotion) face.setEmotion(emotion);
-      face.startSpeaking(text, audio.duration);
+      face.startSpeaking(); // just sets _speaking = true; actual lip weights come from AudioLipSync.getWeights()
     };
     audio.addEventListener('playing', onPlaying, { once: true });
 
     audio.addEventListener('ended', () => {
-      face.stopSpeaking();
+      face.stopSpeaking();         // sets _speaking=false → mouth closes
       URL.revokeObjectURL(objUrl);
       this._currentAudio = null;
-      this._playNext();
+      // Wait 200ms so the mouth is visibly closed before the next sentence starts.
+      // This creates a natural breath/pause between sentences.
+      setTimeout(() => this._playNext(), 200);
     }, { once: true });
 
     audio.addEventListener('error', () => {
@@ -905,8 +996,36 @@ function animate() {
   }
 
   if (currentVRM) {
+    // ── ADVANCED FEATURE 4: Node Constraints ─────────────────────────────
+    // Must run BEFORE vrm.update() so constrained bones are ready when
+    // the humanoid converts normalized→raw bone transforms.
+    if (currentVRM.nodeConstraintManager) {
+      currentVRM.nodeConstraintManager.update();
+    }
+
     face.update(delta, elapsed);   // ← sets normalized bones + expressions
-    currentVRM.update(delta);      // ← converts normalized→raw + spring physics
+    currentVRM.update(delta);      // ← converts normalized→raw + SpringBone physics
+
+    // ── ADVANCED FEATURE 5: MToon UV Animation ───────────────────────────
+    // MToonMaterial supports animated scrolling/rotating UVs defined in the
+    // VRM file (VRMC_materials_mtoon extension). Call updateUVAnimation each
+    // frame so the texture offsets are ticked forward in time.
+    currentVRM.scene.traverse((obj) => {
+      if (obj.isMesh) {
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach(mat => {
+          if (mat && typeof mat.updateUVAnimation === 'function') {
+            mat.updateUVAnimation(delta);
+          }
+        });
+      }
+    });
+
+    // ── ADVANCED FEATURE 6: SpringBone Debug Helper per-frame update ──────
+    // Helpers need their own update() to redraw the wireframes each frame.
+    if (window.debugSpringBone) {
+      _springBoneDebugHelpers.forEach(h => h.update?.());
+    }
   }
 
   renderer.render(scene, camera);

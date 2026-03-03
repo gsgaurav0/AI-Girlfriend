@@ -58,14 +58,18 @@
     </div>
   </div>
 
-  <!-- Three.js + VRM via CDN (importmap) -->
+  <!-- Three.js + VRM — local three-vrm build + CDN Three.js r163 -->
   <script type="importmap">
   {
     "imports": {
       "three": "https://cdn.jsdelivr.net/npm/three@0.163.0/build/three.module.js",
       "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.163.0/examples/jsm/",
-      "@pixiv/three-vrm": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm@3/lib/three-vrm.module.js",
-      "@pixiv/three-vrm-animation": "https://cdn.jsdelivr.net/npm/@pixiv/three-vrm-animation@3/lib/three-vrm-animation.module.js",
+      "@pixiv/three-vrm": "/vrm-lib/packages/three-vrm/lib/three-vrm.module.js",
+      "@pixiv/three-vrm-core": "/vrm-lib/packages/three-vrm-core/lib/three-vrm-core.module.js",
+      "@pixiv/three-vrm-animation": "/vrm-lib/packages/three-vrm-animation/lib/three-vrm-animation.module.js",
+      "@pixiv/three-vrm-springbone": "/vrm-lib/packages/three-vrm-springbone/lib/three-vrm-springbone.module.js",
+      "@pixiv/three-vrm-node-constraint": "/vrm-lib/packages/three-vrm-node-constraint/lib/three-vrm-node-constraint.module.js",
+      "@pixiv/three-vrm-materials-mtoon": "/vrm-lib/packages/three-vrm-materials-mtoon/lib/three-vrm-materials-mtoon.module.js",
       "fflate": "https://cdn.jsdelivr.net/npm/fflate@0.8.2/esm/browser.js"
     }
   }

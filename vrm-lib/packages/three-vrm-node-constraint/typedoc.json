@@ -1,0 +1,4 @@
+{
+  "name": "three-vrm-node-constraint",
+  "entryPoints": ["src/index.ts"]
+}
